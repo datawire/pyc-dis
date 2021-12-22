@@ -199,7 +199,11 @@ const (
 	PyTrue
 )
 
-type PyTuple []interface{}
+type (
+	PyTuple     []interface{}
+	PySet       map[interface{}]struct{}
+	PyFrozenSet map[interface{}]struct{}
+)
 
 func rFloatStr(indent string, in io.Reader, out io.Writer) (string, float64) {
 	n := read_byte(in)
@@ -266,9 +270,11 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 	case TYPE_INT:
 		val := read_i32le(in)
 		fmt.Fprintf(out, "%s(4) val  = %d\n", indent, val)
+		return val
 	case TYPE_INT64:
 		val := read_i64le(in)
 		fmt.Fprintf(out, "%s(8) val  = %d\n", indent, val)
+		return val
 	case TYPE_FLOAT:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
 		_, val := rFloatStr(indent+"    ", in, out)
@@ -383,13 +389,29 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 			ret[k] = v
 		}
 	case TYPE_SET, TYPE_FROZENSET:
-		// TODO
+		fmt.Fprintf(out, "%s    val  =\n")
+		n := read_i32le(in)
+		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+		if n < 0 {
+			return fmt.Errorf("bad marshal data: set size out of range: %d", n)
+		}
+		ret := make(PySet, n)
+		for i := int32(0); i < n; i++ {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("sval[%d]", i))
+			v := rObject(indent+"        ", in, out)
+			ret[v] = struct{}{}
+		}
+		if typ == TYPE_FROZENSET {
+			return PyFrozenSet(ret)
+		}
+		return ret
 	case TYPE_CODE:
 		// TODO
+		return nil
 	case TYPE_REF:
 		// TODO
+		return nil
 	default:
 		panic("should not happen")
 	}
-	return nil
 }
