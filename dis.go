@@ -103,21 +103,12 @@ func Disassemble(in io.Reader, out io.Writer) (err error) {
 		}
 		fmt.Fprintf(out, "(8) ???????? = 0x%s\n", hex.EncodeToString(data[:]))
 	}
-	return Unmarshal(in, out)
-}
 
-// `Python/marshal.c` read_object().
-func Unmarshal(in io.Reader, out io.Writer) (err error) {
-	defer func() {
-		if _err := derror.PanicToError(recover()); _err != nil {
-			err = _err
-		}
-	}()
-
+	fmt.Fprintf(out, "    code     =\n")
 	p := &rFile{
 		in: in,
 	}
-	_ = p.rObject("", out)
+	_ = p.rObject("             : ", out)
 
 	return nil
 }
@@ -275,7 +266,7 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 
 	rRef := func(indent string, o interface{}) interface{} {
 		if flag {
-			fmt.Printf("^^ ref#%d ^^\n", len(p.refs))
+			fmt.Printf("%s^^ ref#%d ^^\n", indent, len(p.refs))
 			p.refs = append(p.refs, o)
 		}
 		return o
@@ -311,7 +302,8 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		return rRef(indent, val)
 	case TYPE_FLOAT:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
-		_, val := p.rFloatStr(indent+"    ", out)
+		sIndent := "         : "
+		_, val := p.rFloatStr(indent+sIndent, out)
 		return rRef(indent, val)
 	case TYPE_BINARY_FLOAT:
 		buf, val := p.rFloatBin()
@@ -319,9 +311,11 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		return val
 	case TYPE_COMPLEX:
 		fmt.Fprintf(out, "%s    real =\n", indent)
-		_, real := p.rFloatStr(indent+"    ", out)
+		sIndent := "         : "
+		fmt.Fprintf(out, "%s    real =\n", indent)
+		_, real := p.rFloatStr(indent+sIndent, out)
 		fmt.Fprintf(out, "%s    imag =\n", indent)
-		_, imag := p.rFloatStr(indent+"    ", out)
+		_, imag := p.rFloatStr(indent+sIndent, out)
 		return rRef(indent, complex(real, imag))
 	case TYPE_BINARY_COMPLEX:
 		buf, real := p.rFloatBin()
@@ -331,27 +325,29 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		return rRef(indent, complex(real, imag))
 	case TYPE_STRING:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		n := read_i32le(p.in)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: bytes object size out of range: %d", n)
 		}
-		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+sIndent, n)
 		buf := make([]byte, n)
 		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		fmt.Fprintf(out, "%s%-8ssval = %q\n", indent+sIndent, fmt.Sprintf("(%d)", n), buf)
 		return rRef(indent, buf)
 	case TYPE_ASCII_INTERNED, TYPE_ASCII, TYPE_SHORT_ASCII_INTERNED, TYPE_SHORT_ASCII:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		//isInterned := (typ == TYPE_ASCII_INTERNED) || (typ == TYPE_SHORT_ASCII_INTERNED)
 		var n int32
 		if (typ == TYPE_ASCII) || (typ == TYPE_ASCII_INTERNED) {
 			n = read_i32le(p.in)
-			fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+			fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+sIndent, n)
 		} else {
 			n = int32(read_byte(p.in))
-			fmt.Fprintf(out, "%s(1)     slen = %d\n", indent+"    ", n)
+			fmt.Fprintf(out, "%s(1)     slen = %d\n", indent+sIndent, n)
 		}
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: string object size out of range: %d", n)
@@ -360,13 +356,14 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		fmt.Fprintf(out, "%s%-8ssval = %q\n", indent+sIndent, fmt.Sprintf("(%d)", n), buf)
 		return rRef(indent, string(buf))
 	case TYPE_INTERNED, TYPE_UNICODE:
 		//isInterned := (typ == TYPE_INTERNED)
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		n := read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+sIndent, n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: string size out of range: %d", n)
 		}
@@ -374,59 +371,67 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		fmt.Fprintf(out, "%s%-8ssval = %q\n", indent+sIndent, fmt.Sprintf("(%d)", n), buf)
 		return rRef(indent, string(buf))
 	case TYPE_TUPLE, TYPE_SMALL_TUPLE:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		var n int32
 		if typ == TYPE_TUPLE {
 			n = read_i32le(p.in)
-			fmt.Fprintf(out, "%s(4)     tlen = %d\n", indent+"    ", n)
+			fmt.Fprintf(out, "%s(4)     tlen = %d\n", indent+sIndent, n)
 		} else {
 			n = int32(read_byte(p.in))
-			fmt.Fprintf(out, "%s(1)     tlen = %d\n", indent+"    ", n)
+			fmt.Fprintf(out, "%s(1)     tlen = %d\n", indent+sIndent, n)
 		}
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: tuple size out of range: %d", n)
 		}
 		ret := make(PyTuple, n)
+		tIndent := sIndent + "             : "
 		for i := range ret {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("tval[%d]", i))
-			ret[i] = p.rObject(indent+"    ", out)
+			fmt.Fprintf(out, "%s% 12s =\n", indent+sIndent, fmt.Sprintf("tval[%d]", i))
+			ret[i] = p.rObject(indent+tIndent, out)
 		}
 		return rRef(indent, ret)
 	case TYPE_LIST:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         = "
 		n := read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4)     llen = %d\n", indent+"    ", n)
+		fmt.Fprintf(out, "%s(4)     llen = %d\n", indent+sIndent, n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: list size out of range: %d", n)
 		}
 		ret := make([]interface{}, n)
+		tIndent := sIndent + "             : "
 		for i := range ret {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("lval[%d]", i))
-			ret[i] = p.rObject(indent+"    ", out)
+			fmt.Fprintf(out, "%s% 12s =\n", indent+sIndent, fmt.Sprintf("lval[%d]", i))
+			ret[i] = p.rObject(indent+tIndent, out)
 		}
 		return rRef(indent, ret)
 	case TYPE_DICT:
+		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		// NULL-terminated
 		ret := make(map[interface{}]interface{})
 		_ = rRef(indent, ret)
 		i := 0
+		tIndent := sIndent + "             : "
 		for {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dkey[%d]", i))
-			k := p.rObject(indent+"        ", out)
+			fmt.Fprintf(out, "%s% 12s =\n", indent+sIndent, fmt.Sprintf("dkey[%d]", i))
+			k := p.rObject(indent+tIndent, out)
 			if k == nil {
 				return ret
 			}
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dval[%d]", i))
-			v := p.rObject(indent+"        ", out)
+			fmt.Fprintf(out, "%s% 12s =\n", indent+sIndent, fmt.Sprintf("dval[%d]", i))
+			v := p.rObject(indent+tIndent, out)
 			ret[k] = v
 		}
 	case TYPE_SET, TYPE_FROZENSET:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		n := read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+sIndent, n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: set size out of range: %d", n)
 		}
@@ -436,9 +441,10 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		} else {
 			_ = rRef(indent, PyFrozenSet(ret))
 		}
+		tIndent := sIndent + "             : "
 		for i := int32(0); i < n; i++ {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("sval[%d]", i))
-			v := p.rObject(indent+"        ", out)
+			fmt.Fprintf(out, "%s% 12s =\n", indent+sIndent, fmt.Sprintf("sval[%d]", i))
+			v := p.rObject(indent+tIndent, out)
 			ret[v] = struct{}{}
 		}
 		if typ == TYPE_FROZENSET {
@@ -447,60 +453,63 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		return ret
 	case TYPE_CODE:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
+		sIndent := "         : "
 		val := &PyCode{}
 		_ = rRef(indent, val)
 
 		val.NArgs = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) nArg      = %d\n", indent+"    ", val.NArgs)
+		fmt.Fprintf(out, "%s(4) nArg      = %d\n", indent+sIndent, val.NArgs)
+		tIndent := sIndent + "              : "
 
 		val.NPosArgs = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) nPosArg   = %d\n", indent+"    ", val.NPosArgs)
+		fmt.Fprintf(out, "%s(4) nPosArg   = %d\n", indent+sIndent, val.NPosArgs)
 
 		val.NKwArgs = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) nKwArg    = %d\n", indent+"    ", val.NKwArgs)
+		fmt.Fprintf(out, "%s(4) nKwArg    = %d\n", indent+sIndent, val.NKwArgs)
 
 		val.NLocals = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) nLocals   = %d\n", indent+"    ", val.NLocals)
+		fmt.Fprintf(out, "%s(4) nLocals   = %d\n", indent+sIndent, val.NLocals)
 
 		val.StackSize = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) stackSize = %d\n", indent+"    ", val.StackSize)
+		fmt.Fprintf(out, "%s(4) stackSize = %d\n", indent+sIndent, val.StackSize)
 
 		val.Flags = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) flags     = %#08x\n", indent+"    ", val.Flags)
+		fmt.Fprintf(out, "%s(4) flags     = %#08x\n", indent+sIndent, val.Flags)
 
-		fmt.Fprintf(out, "%s    code      =\n", indent+"    ")
-		val.Code = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    code      =\n", indent+sIndent)
+		val.Code = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    consts    =\n", indent+"    ")
-		val.Consts = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    consts    =\n", indent+sIndent)
+		val.Consts = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    names     =\n", indent+"    ")
-		val.Names = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    names     =\n", indent+sIndent)
+		val.Names = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    varnames  =\n", indent+"    ")
-		val.VarNames = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    varnames  =\n", indent+sIndent)
+		val.VarNames = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    freevars  =\n", indent+"    ")
-		val.FreeVars = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    freevars  =\n", indent+sIndent)
+		val.FreeVars = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    cellvars  =\n", indent+"    ")
-		val.CellVars = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    cellvars  =\n", indent+sIndent)
+		val.CellVars = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    filename  =\n", indent+"    ")
-		val.Filename = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    filename  =\n", indent+sIndent)
+		val.Filename = p.rObject(indent+tIndent, out)
 
-		fmt.Fprintf(out, "%s    name      =\n", indent+"    ")
-		val.Name = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    name      =\n", indent+sIndent)
+		val.Name = p.rObject(indent+tIndent, out)
 
 		val.FirstLineNo = read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4) 1st-line  = %d\n", indent+"    ", val.FirstLineNo)
+		fmt.Fprintf(out, "%s(4) 1st-line  = %d\n", indent+sIndent, val.FirstLineNo)
 
-		fmt.Fprintf(out, "%s    lNoTab    =\n", indent+"    ")
-		val.LNoTab = p.rObject(indent+"        ", out)
+		fmt.Fprintf(out, "%s    lNoTab    =\n", indent+sIndent)
+		val.LNoTab = p.rObject(indent+tIndent, out)
 
 		return val
 	case TYPE_REF:
 		n := read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) ref  = %d\n", indent, n)
 		if n < 0 || int(n) >= len(p.refs) {
 			return fmt.Errorf("bad marshal data: invalid reference: %d", n)
 		}
