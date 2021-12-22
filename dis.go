@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/datawire/dlib/derror"
@@ -113,7 +114,9 @@ func Unmarshal(in io.Reader, out io.Writer) (err error) {
 		}
 	}()
 
-	return rObject("", in, out)
+	_ = rObject("", in, out)
+
+	return nil
 }
 
 var typ2name = map[uint8]string{
@@ -186,15 +189,31 @@ const (
 	TYPE_SHORT_ASCII_INTERNED = 'Z'
 )
 
-func rFloatStr(indent string, in io.Reader, out io.Writer) (err error) {
+type PyConst int
+
+const (
+	PyNone PyConst = iota
+	PyStopIteration
+	PyEllipsis
+	PyFalse
+	PyTrue
+)
+
+type PyTuple []interface{}
+
+func rFloatStr(indent string, in io.Reader, out io.Writer) (string, float64) {
 	n := read_byte(in)
 	fmt.Fprintf(out, "%s(1)   flen = %d\n", n)
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(in, buf); err != nil {
-		return err
+		panic(err)
 	}
-	fmt.Fprintf(out, "%s(% 3d) fstr = %q\n", buf)
-	return nil
+	val, err := strconv.ParseFloat(string(buf), 64)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintf(out, "%s(% 3d) fval = %q (%v)\n", buf, val)
+	return string(buf), val
 }
 
 func rFloatBin(in io.Reader) ([8]byte, float64) {
@@ -209,14 +228,14 @@ func rFloatBin(in io.Reader) ([8]byte, float64) {
 	return buf, val
 }
 
-func rObject(indent string, in io.Reader, out io.Writer) (err error) {
+func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 	typ := read_byte(in)
 	flag := (typ & FLAG_REF) != 0
 	typ &^= FLAG_REF
 
 	typName, ok := typ2name[typ]
 	if !ok {
-		return fmt.Errorf("unknown type %[1]d %[1]c", typ)
+		panic(fmt.Errorf("unknown type %[1]d %[1]c", typ))
 	}
 
 	flagStr := "0"
@@ -228,42 +247,48 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 	switch typ {
 	case TYPE_NULL:
 		// do nothing
+		nil
 	case TYPE_NONE:
 		fmt.Fprintf(out, "%s         : val = None\n", indent)
+		return PyNone
 	case TYPE_STOPITER:
 		fmt.Fprintf(out, "%s         : val = StopIteration\n", indent)
+		return PyStopIteration
 	case TYPE_ELLIPSIS:
 		fmt.Fprintf(out, "%s         : val = Ellipsis\n", indent)
+		return PyEllipsis
 	case TYPE_FALSE:
 		fmt.Fprintf(out, "%s         : val = False\n", indent)
+		return PyFalse
 	case TYPE_TRUE:
 		fmt.Fprintf(out, "%s         : val = True\n", indent)
+		return PyTrue
 	case TYPE_INT:
-		fmt.Fprintf(out, "%s(4) val  = %d\n", indent, read_i32le(in))
+		val := read_i32le(in)
+		fmt.Fprintf(out, "%s(4) val  = %d\n", indent, val)
 	case TYPE_INT64:
-		fmt.Fprintf(out, "%s(8) val  = %d\n", indent, read_i64le(in))
+		val := read_i64le(in)
+		fmt.Fprintf(out, "%s(8) val  = %d\n", indent, val)
 	case TYPE_FLOAT:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
-		if err := rFloatStr(indent+"    ", in, out); err != nil {
-			return err
-		}
+		_, val := rFloatStr(indent+"    ", in, out)
+		return val
 	case TYPE_BINARY_FLOAT:
 		buf, val := rFloatBin(in)
 		fmt.Fprintf(out, "%s(8) val  = %s (%v)\n", indent, hex.EncodeToString(buf[:]), val)
+		return val
 	case TYPE_COMPLEX:
 		fmt.Fprintf(out, "%s    real =\n", indent)
-		if err := rFloatStr(indent+"    ", in, out); err != nil {
-			return err
-		}
+		_, real := rFloatStr(indent+"    ", in, out)
 		fmt.Fprintf(out, "%s    imag =\n", indent)
-		if err := rFloatStr(indent+"    ", in, out); err != nil {
-			return err
-		}
+		_, imag := rFloatStr(indent+"    ", in, out)
+		return complex(real, imag)
 	case TYPE_BINARY_COMPLEX:
-		buf, val := rFloatBin(in)
-		fmt.Fprintf(out, "%s    real = %s (%v)\n", indent, hex.EncodeToString(buf[:]), val)
-		buf, val = rFloatBin(in)
-		fmt.Fprintf(out, "%s    imag = %s (%v)\n", indent, hex.EncodeToString(buf[:]), val)
+		buf, real := rFloatBin(in)
+		fmt.Fprintf(out, "%s(8) real = %s (%v)\n", indent, hex.EncodeToString(buf[:]), real)
+		buf, imag := rFloatBin(in)
+		fmt.Fprintf(out, "%s(8) imag = %s (%v)\n", indent, hex.EncodeToString(buf[:]), imag)
+		return complex(real, imag)
 	case TYPE_STRING:
 		fmt.Fprintf(out, "%s    val  =\n")
 		n := read_i32le(in)
@@ -276,6 +301,7 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		return buf
 	case TYPE_ASCII_INTERNED, TYPE_ASCII, TYPE_SHORT_ASCII_INTERNED, TYPE_SHORT_ASCII:
 		fmt.Fprintf(out, "%s    val  =\n")
 		//isInterned := (typ == TYPE_ASCII_INTERNED) || (typ == TYPE_SHORT_ASCII_INTERNED)
@@ -288,13 +314,14 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 			fmt.Fprintf(out, "%s(1)     slen = %d\n", indent+"    ", n)
 		}
 		if n < 0 {
-			return fmt.Errorf("bad marshal data: bytes object size out of range: %d", n)
+			return fmt.Errorf("bad marshal data: string object size out of range: %d", n)
 		}
 		buf := make([]byte, n)
 		if _, err := io.ReadFull(in, buf); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		return string(buf)
 	case TYPE_INTERNED, TYPE_UNICODE:
 		//isInterned := (typ == TYPE_INTERNED)
 		fmt.Fprintf(out, "%s    val  =\n")
@@ -308,6 +335,7 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+		return string(buf)
 	case TYPE_TUPLE, TYPE_SMALL_TUPLE:
 		fmt.Fprintf(out, "%s    val  =\n")
 		var n int32
@@ -321,12 +349,12 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: tuple size out of range: %d", n)
 		}
-		for i := int32(0); i < n; i++ {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("tval[%d]", n))
-			if err := rObject(indent+"    ", in, out); err != nil {
-				return err
-			}
+		ret := make(PyTuple, n)
+		for i := range ret {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("tval[%d]", i))
+			ret[i] = rObject(indent+"    ", in, out)
 		}
+		return ret
 	case TYPE_LIST:
 		fmt.Fprintf(out, "%s    val  =\n")
 		n := read_i32le(in)
@@ -334,18 +362,26 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: list size out of range: %d", n)
 		}
-		buf := make([]byte, n)
-		if _, err := io.ReadFull(in, buf); err != nil {
-			return err
+		ret := make([]interface{}, n)
+		for i := range ret {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("lval[%d]", i))
+			ret[i] = rObject(indent+"    ", in, out)
 		}
-		for i := int32(0); i < n; i++ {
-			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("lval[%d]", n))
-			if err := rObject(indent+"    ", in, out); err != nil {
-				return err
-			}
-		}
+		return ret
 	case TYPE_DICT:
-		// TODO
+		// NULL-terminated
+		ret := make(map[interface{}]interface{})
+		i := 0
+		for {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dkey[%d]", i))
+			k := rObject(indent+"        ", in, out)
+			if k == nil {
+				return ret
+			}
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dval[%d]", i))
+			v := rObject(indent+"        ", in, out)
+			ret[k] = v
+		}
 	case TYPE_SET, TYPE_FROZENSET:
 		// TODO
 	case TYPE_CODE:
