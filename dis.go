@@ -114,7 +114,10 @@ func Unmarshal(in io.Reader, out io.Writer) (err error) {
 		}
 	}()
 
-	_ = rObject("", in, out)
+	p := &rFile{
+		in: in,
+	}
+	_ = p.rObject("", out)
 
 	return nil
 }
@@ -205,11 +208,16 @@ type (
 	PyFrozenSet map[interface{}]struct{}
 )
 
-func rFloatStr(indent string, in io.Reader, out io.Writer) (string, float64) {
-	n := read_byte(in)
+type rFile struct {
+	in   io.Reader
+	refs []interface{}
+}
+
+func (p *rFile) rFloatStr(indent string, out io.Writer) (string, float64) {
+	n := read_byte(p.in)
 	fmt.Fprintf(out, "%s(1)   flen = %d\n", n)
 	buf := make([]byte, n)
-	if _, err := io.ReadFull(in, buf); err != nil {
+	if _, err := io.ReadFull(p.in, buf); err != nil {
 		panic(err)
 	}
 	val, err := strconv.ParseFloat(string(buf), 64)
@@ -220,9 +228,9 @@ func rFloatStr(indent string, in io.Reader, out io.Writer) (string, float64) {
 	return string(buf), val
 }
 
-func rFloatBin(in io.Reader) ([8]byte, float64) {
+func (p *rFile) rFloatBin() ([8]byte, float64) {
 	var buf [8]byte
-	if _, err := io.ReadFull(in, buf[:]); err != nil {
+	if _, err := io.ReadFull(p.in, buf[:]); err != nil {
 		panic(err)
 	}
 	var val float64
@@ -232,8 +240,8 @@ func rFloatBin(in io.Reader) ([8]byte, float64) {
 	return buf, val
 }
 
-func rObject(indent string, in io.Reader, out io.Writer) interface{} {
-	typ := read_byte(in)
+func (p *rFile) rObject(indent string, out io.Writer) interface{} {
+	typ := read_byte(p.in)
 	flag := (typ & FLAG_REF) != 0
 	typ &^= FLAG_REF
 
@@ -247,6 +255,12 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 		flagStr = "FLAG_REF"
 	}
 	fmt.Fprintf(out, "%[1]s(1) type = %[2]q (%[2]s) | %[3]s\n", indent, typ, flagStr, typName)
+
+	rRef := func(indent string, o interface{}) interface{} {
+		fmt.Printf("^^ ref#%d ^^\n", len(p.refs))
+		p.refs = append(p.refs, o)
+		return o
+	}
 
 	switch typ {
 	case TYPE_NULL:
@@ -268,88 +282,89 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 		fmt.Fprintf(out, "%s         : val = True\n", indent)
 		return PyTrue
 	case TYPE_INT:
-		val := read_i32le(in)
+		val := read_i32le(p.in)
 		fmt.Fprintf(out, "%s(4) val  = %d\n", indent, val)
+		rRef(indent, val)
 		return val
 	case TYPE_INT64:
-		val := read_i64le(in)
+		val := read_i64le(p.in)
 		fmt.Fprintf(out, "%s(8) val  = %d\n", indent, val)
-		return val
+		return rRef(indent, val)
 	case TYPE_FLOAT:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
-		_, val := rFloatStr(indent+"    ", in, out)
-		return val
+		_, val := p.rFloatStr(indent+"    ", out)
+		return rRef(indent, val)
 	case TYPE_BINARY_FLOAT:
-		buf, val := rFloatBin(in)
+		buf, val := p.rFloatBin()
 		fmt.Fprintf(out, "%s(8) val  = %s (%v)\n", indent, hex.EncodeToString(buf[:]), val)
 		return val
 	case TYPE_COMPLEX:
 		fmt.Fprintf(out, "%s    real =\n", indent)
-		_, real := rFloatStr(indent+"    ", in, out)
+		_, real := p.rFloatStr(indent+"    ", out)
 		fmt.Fprintf(out, "%s    imag =\n", indent)
-		_, imag := rFloatStr(indent+"    ", in, out)
-		return complex(real, imag)
+		_, imag := p.rFloatStr(indent+"    ", out)
+		return rRef(indent, complex(real, imag))
 	case TYPE_BINARY_COMPLEX:
-		buf, real := rFloatBin(in)
+		buf, real := p.rFloatBin()
 		fmt.Fprintf(out, "%s(8) real = %s (%v)\n", indent, hex.EncodeToString(buf[:]), real)
-		buf, imag := rFloatBin(in)
+		buf, imag := p.rFloatBin()
 		fmt.Fprintf(out, "%s(8) imag = %s (%v)\n", indent, hex.EncodeToString(buf[:]), imag)
-		return complex(real, imag)
+		return rRef(indent, complex(real, imag))
 	case TYPE_STRING:
 		fmt.Fprintf(out, "%s    val  =\n")
-		n := read_i32le(in)
+		n := read_i32le(p.in)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: bytes object size out of range: %d", n)
 		}
 		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
 		buf := make([]byte, n)
-		if _, err := io.ReadFull(in, buf); err != nil {
+		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
-		return buf
+		return rRef(indent, buf)
 	case TYPE_ASCII_INTERNED, TYPE_ASCII, TYPE_SHORT_ASCII_INTERNED, TYPE_SHORT_ASCII:
 		fmt.Fprintf(out, "%s    val  =\n")
 		//isInterned := (typ == TYPE_ASCII_INTERNED) || (typ == TYPE_SHORT_ASCII_INTERNED)
 		var n int32
 		if (typ == TYPE_ASCII) || (typ == TYPE_ASCII_INTERNED) {
-			n = read_i32le(in)
+			n = read_i32le(p.in)
 			fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
 		} else {
-			n = int32(read_byte(in))
+			n = int32(read_byte(p.in))
 			fmt.Fprintf(out, "%s(1)     slen = %d\n", indent+"    ", n)
 		}
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: string object size out of range: %d", n)
 		}
 		buf := make([]byte, n)
-		if _, err := io.ReadFull(in, buf); err != nil {
+		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
-		return string(buf)
+		return rRef(indent, string(buf))
 	case TYPE_INTERNED, TYPE_UNICODE:
 		//isInterned := (typ == TYPE_INTERNED)
 		fmt.Fprintf(out, "%s    val  =\n")
-		n := read_i32le(in)
+		n := read_i32le(p.in)
 		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: string size out of range: %d", n)
 		}
 		buf := make([]byte, n)
-		if _, err := io.ReadFull(in, buf); err != nil {
+		if _, err := io.ReadFull(p.in, buf); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
-		return string(buf)
+		return rRef(indent, string(buf))
 	case TYPE_TUPLE, TYPE_SMALL_TUPLE:
 		fmt.Fprintf(out, "%s    val  =\n")
 		var n int32
 		if typ == TYPE_TUPLE {
-			n = read_i32le(in)
+			n = read_i32le(p.in)
 			fmt.Fprintf(out, "%s(4)     tlen = %d\n", indent+"    ", n)
 		} else {
-			n = int32(read_byte(in))
+			n = int32(read_byte(p.in))
 			fmt.Fprintf(out, "%s(1)     tlen = %d\n", indent+"    ", n)
 		}
 		if n < 0 {
@@ -358,12 +373,12 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 		ret := make(PyTuple, n)
 		for i := range ret {
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("tval[%d]", i))
-			ret[i] = rObject(indent+"    ", in, out)
+			ret[i] = p.rObject(indent+"    ", out)
 		}
-		return ret
+		return rRef(indent, ret)
 	case TYPE_LIST:
 		fmt.Fprintf(out, "%s    val  =\n")
-		n := read_i32le(in)
+		n := read_i32le(p.in)
 		fmt.Fprintf(out, "%s(4)     llen = %d\n", indent+"    ", n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: list size out of range: %d", n)
@@ -371,26 +386,26 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 		ret := make([]interface{}, n)
 		for i := range ret {
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("lval[%d]", i))
-			ret[i] = rObject(indent+"    ", in, out)
+			ret[i] = p.rObject(indent+"    ", out)
 		}
-		return ret
+		return rRef(indent, ret)
 	case TYPE_DICT:
 		// NULL-terminated
 		ret := make(map[interface{}]interface{})
 		i := 0
 		for {
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dkey[%d]", i))
-			k := rObject(indent+"        ", in, out)
+			k := p.rObject(indent+"        ", out)
 			if k == nil {
-				return ret
+				return rRef(indent, ret)
 			}
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dval[%d]", i))
-			v := rObject(indent+"        ", in, out)
+			v := p.rObject(indent+"        ", out)
 			ret[k] = v
 		}
 	case TYPE_SET, TYPE_FROZENSET:
 		fmt.Fprintf(out, "%s    val  =\n")
-		n := read_i32le(in)
+		n := read_i32le(p.in)
 		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
 		if n < 0 {
 			return fmt.Errorf("bad marshal data: set size out of range: %d", n)
@@ -398,19 +413,22 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 		ret := make(PySet, n)
 		for i := int32(0); i < n; i++ {
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("sval[%d]", i))
-			v := rObject(indent+"        ", in, out)
+			v := p.rObject(indent+"        ", out)
 			ret[v] = struct{}{}
 		}
 		if typ == TYPE_FROZENSET {
 			return PyFrozenSet(ret)
 		}
-		return ret
+		return rRef(indent, ret)
 	case TYPE_CODE:
 		// TODO
 		return nil
 	case TYPE_REF:
-		// TODO
-		return nil
+		n := read_i32le(p.in)
+		if n < 0 || int(n) >= len(p.refs){
+			return fmt.Errorf("bad marshal data: invalid reference: %d", n)
+		}
+		return p.refs[n]
 	default:
 		panic("should not happen")
 	}
