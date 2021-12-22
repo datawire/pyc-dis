@@ -247,7 +247,7 @@ func rObject(indent string, in io.Reader, out io.Writer) interface{} {
 	switch typ {
 	case TYPE_NULL:
 		// do nothing
-		nil
+		return nil
 	case TYPE_NONE:
 		fmt.Fprintf(out, "%s         : val = None\n", indent)
 		return PyNone
