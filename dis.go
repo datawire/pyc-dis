@@ -208,6 +208,23 @@ type (
 	PyFrozenSet map[interface{}]struct{}
 )
 
+type PyCode struct {
+	NArgs, NPosArgs, NKwArgs int32
+	NLocals                  int32
+	StackSize                int32
+	Flags                    int32
+	Code                     interface{}
+	Consts                   interface{}
+	Names                    interface{}
+	VarNames                 interface{}
+	FreeVars                 interface{}
+	CellVars                 interface{}
+	Filename                 interface{}
+	Name                     interface{}
+	FirstLineNo              int32
+	LNoTab                   interface{}
+}
+
 type rFile struct {
 	in   io.Reader
 	refs []interface{}
@@ -394,12 +411,13 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 	case TYPE_DICT:
 		// NULL-terminated
 		ret := make(map[interface{}]interface{})
+		_ = rRef(indent, ret)
 		i := 0
 		for {
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dkey[%d]", i))
 			k := p.rObject(indent+"        ", out)
 			if k == nil {
-				return rRef(indent, ret)
+				return ret
 			}
 			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("dval[%d]", i))
 			v := p.rObject(indent+"        ", out)
@@ -429,15 +447,57 @@ func (p *rFile) rObject(indent string, out io.Writer) interface{} {
 		return ret
 	case TYPE_CODE:
 		fmt.Fprintf(out, "%s    val  =\n", indent)
-		ref := len(p.refs)
-		_ = rRef(indent, PyNone)
+		val := &PyCode{}
+		_ = rRef(indent, val)
 
-		argCount := read_i32le(p.in)
-		fmt.Fprintf(out, "%s(4)     narg = %d\n", indent+"    ", argCount)
-		// TODO
-		var val interface{}
+		val.NArgs = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) nArg      = %d\n", indent+"    ", val.NArgs)
 
-		p.refs[ref] = val
+		val.NPosArgs = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) nPosArg   = %d\n", indent+"    ", val.NPosArgs)
+
+		val.NKwArgs = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) nKwArg    = %d\n", indent+"    ", val.NKwArgs)
+
+		val.NLocals = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) nLocals   = %d\n", indent+"    ", val.NLocals)
+
+		val.StackSize = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) stackSize = %d\n", indent+"    ", val.StackSize)
+
+		val.Flags = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) flags     = %#08x\n", indent+"    ", val.Flags)
+
+		fmt.Fprintf(out, "%s    code      =\n", indent+"    ")
+		val.Code = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    consts    =\n", indent+"    ")
+		val.Consts = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    names     =\n", indent+"    ")
+		val.Names = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    varnames  =\n", indent+"    ")
+		val.VarNames = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    freevars  =\n", indent+"    ")
+		val.FreeVars = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    cellvars  =\n", indent+"    ")
+		val.CellVars = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    filename  =\n", indent+"    ")
+		val.Filename = p.rObject(indent+"        ", out)
+
+		fmt.Fprintf(out, "%s    name      =\n", indent+"    ")
+		val.Name = p.rObject(indent+"        ", out)
+
+		val.FirstLineNo = read_i32le(p.in)
+		fmt.Fprintf(out, "%s(4) 1st-line  = %d\n", indent+"    ", val.FirstLineNo)
+
+		fmt.Fprintf(out, "%s    lNoTab    =\n", indent+"    ")
+		val.LNoTab = p.rObject(indent+"        ", out)
+
 		return val
 	case TYPE_REF:
 		n := read_i32le(p.in)
