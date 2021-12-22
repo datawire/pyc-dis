@@ -278,7 +278,7 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
 	case TYPE_ASCII_INTERNED, TYPE_ASCII, TYPE_SHORT_ASCII_INTERNED, TYPE_SHORT_ASCII:
 		fmt.Fprintf(out, "%s    val  =\n")
-		isInterned := (typ == TYPE_ASCII_INTERNED) || (typ == TYPE_SHORT_ASCII_INTERNED)
+		//isInterned := (typ == TYPE_ASCII_INTERNED) || (typ == TYPE_SHORT_ASCII_INTERNED)
 		var n int32
 		if (typ == TYPE_ASCII) || (typ == TYPE_ASCII_INTERNED) {
 			n = read_i32le(in)
@@ -287,7 +287,73 @@ func rObject(indent string, in io.Reader, out io.Writer) (err error) {
 			n = int32(read_byte(in))
 			fmt.Fprintf(out, "%s(1)     slen = %d\n", indent+"    ", n)
 		}
+		if n < 0 {
+			return fmt.Errorf("bad marshal data: bytes object size out of range: %d", n)
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(in, buf); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+	case TYPE_INTERNED, TYPE_UNICODE:
+		//isInterned := (typ == TYPE_INTERNED)
+		fmt.Fprintf(out, "%s    val  =\n")
+		n := read_i32le(in)
+		fmt.Fprintf(out, "%s(4)     slen = %d\n", indent+"    ", n)
+		if n < 0 {
+			return fmt.Errorf("bad marshal data: string size out of range: %d", n)
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(in, buf); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%s%8ssval = %q\n", indent+"    ", fmt.Sprintf("(%d)", n), buf)
+	case TYPE_TUPLE, TYPE_SMALL_TUPLE:
+		fmt.Fprintf(out, "%s    val  =\n")
+		var n int32
+		if typ == TYPE_TUPLE {
+			n = read_i32le(in)
+			fmt.Fprintf(out, "%s(4)     tlen = %d\n", indent+"    ", n)
+		} else {
+			n = int32(read_byte(in))
+			fmt.Fprintf(out, "%s(1)     tlen = %d\n", indent+"    ", n)
+		}
+		if n < 0 {
+			return fmt.Errorf("bad marshal data: tuple size out of range: %d", n)
+		}
+		for i := int32(0); i < n; i++ {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("tval[%d]", n))
+			if err := rObject(indent+"    ", in, out); err != nil {
+				return err
+			}
+		}
+	case TYPE_LIST:
+		fmt.Fprintf(out, "%s    val  =\n")
+		n := read_i32le(in)
+		fmt.Fprintf(out, "%s(4)     llen = %d\n", indent+"    ", n)
+		if n < 0 {
+			return fmt.Errorf("bad marshal data: list size out of range: %d", n)
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(in, buf); err != nil {
+			return err
+		}
+		for i := int32(0); i < n; i++ {
+			fmt.Fprintf(out, "%s% 12s =\n", indent+"    ", fmt.Sprintf("lval[%d]", n))
+			if err := rObject(indent+"    ", in, out); err != nil {
+				return err
+			}
+		}
+	case TYPE_DICT:
 		// TODO
+	case TYPE_SET, TYPE_FROZENSET:
+		// TODO
+	case TYPE_CODE:
+		// TODO
+	case TYPE_REF:
+		// TODO
+	default:
+		panic("should not happen")
 	}
 	return nil
 }
